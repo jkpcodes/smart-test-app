@@ -1,0 +1,60 @@
+# Build results
+bin/
+obj/
+Debug/
+Release/
+x64/
+x86/
+
+# Visual Studio
+.vs/
+.vscode/
+*.user
+*.suo
+*.sln.docstates
+
+# User-specific files
+.idea/
+*.swp
+*.swo
+*~
+
+# NuGet
+*.nupkg
+*.snupkg
+.nuget/
+
+# Dependencies
+packages/
+node_modules/
+
+# Environment and configuration
+appsettings.Development.json
+appsettings.Production.json
+.env
+.env.local
+launchSettings.json
+
+# Database files
+*.db
+*.db-shm
+*.db-wal
+*.mdf
+*.ldf
+
+# Logs
+logs/
+*.log
+
+# IDE
+.DS_Store
+Thumbs.db
+
+# Runtime
+*.dll
+*.exe
+*.pdb
+
+# Test Results
+TestResults/
+.coverage

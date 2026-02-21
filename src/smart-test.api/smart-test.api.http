@@ -1,0 +1,6 @@
+@smart_test.api_HostAddress = http://localhost:5221
+
+GET {{smart_test.api_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

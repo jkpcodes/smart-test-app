@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/smart-test.api/smart-test.api.csproj" />
+    <Project Path="src/smart-test.app/smart-test.app.csproj" />
+    <Project Path="src/smart-test.domain/smart-test.domain.csproj" />
+    <Project Path="src/smart-test.infrastructure.data/smart-test.infrastructure.data.csproj" />
+    <Project Path="src/smart-test.infrastructure.identity/smart-test.infrastructure.identity.csproj" />
+  </Folder>
+</Solution>
