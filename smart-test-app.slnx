@@ -6,4 +6,9 @@
     <Project Path="src/smart-test.infrastructure.data/smart-test.infrastructure.data.csproj" />
     <Project Path="src/smart-test.infrastructure.identity/smart-test.infrastructure.identity.csproj" />
   </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/smart-test.api.tests/smart-test.api.tests.csproj" />
+    <Project Path="tests/smart-test.app.tests/smart-test.app.tests.csproj" />
+    <Project Path="tests/smart-test.infrastructure.identity.tests/smart-test.infrastructure.identity.tests.csproj" />
+  </Folder>
 </Solution>

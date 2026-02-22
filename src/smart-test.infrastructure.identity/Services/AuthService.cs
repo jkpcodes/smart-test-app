@@ -4,12 +4,13 @@ using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.AspNetCore.Identity;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
 using SmartTest.App.Common;
 using SmartTest.App.Constants;
+using SmartTest.App.Constants.ErrorMessages;
 using SmartTest.App.DTOs.Auth;
-using SmartTest.App.Exceptions;
 using SmartTest.App.Services;
 using SmartTest.Domain.Settings;
 using SmartTest.Infrastructure.Identity.Models;
@@ -22,17 +23,20 @@ public class AuthService : IAuthService
     private readonly RoleManager<IdentityRole> _roleManager;
     private readonly SignInManager<ApplicationUser> _signInManager;
     private readonly JwtSettings _jwtSettings;
+    private readonly ILogger<AuthService> _logger;
 
     public AuthService(
         UserManager<ApplicationUser> userManager,
         RoleManager<IdentityRole> roleManager,
         SignInManager<ApplicationUser> signInManager,
-        IOptions<JwtSettings> jwtSettings)
+        IOptions<JwtSettings> jwtSettings,
+        ILogger<AuthService> logger)
     {
         _userManager = userManager;
         _roleManager = roleManager;
         _signInManager = signInManager;
         _jwtSettings = jwtSettings.Value;
+        _logger = logger;
     }
 
     public async Task<Result<AuthResponse>> RegisterAsync(RegisterRequest request)
@@ -41,7 +45,7 @@ public class AuthService : IAuthService
         var existingUser = await _userManager.FindByEmailAsync(request.Email);
         if (existingUser is not null)
         {
-            return Result<AuthResponse>.Failure($"An account with email '{request.Email}' already exists.", HttpStatusCode.Conflict);
+            return Result<AuthResponse>.Failure(AuthErrorMessages.EmailAlreadyExists(request.Email), HttpStatusCode.Conflict);
         }
 
         var user = new ApplicationUser
@@ -59,34 +63,49 @@ public class AuthService : IAuthService
         if (!result.Succeeded)
         {
             var errors = string.Join(", ", result.Errors.Select(e => e.Description));
-            throw new BadRequestException($"User registration failed: {errors}");
+            return Result<AuthResponse>.Failure(AuthErrorMessages.RegistrationFailed(errors), HttpStatusCode.InternalServerError);
         }
 
-        // Always assign "User" role on registration
-        await _userManager.AddToRoleAsync(user, AppRoles.User);
-
-        var roles = await _userManager.GetRolesAsync(user);
-        var accessToken = GenerateJwtToken(user, roles);
-        var refreshToken = GenerateRefreshToken();
-        var refreshTokenExpiry = DateTime.UtcNow.AddDays(_jwtSettings.RefreshTokenExpirationInDays);
-
-        // Store refresh token
-        user.RefreshToken = refreshToken;
-        user.RefreshTokenExpiryTime = refreshTokenExpiry;
-        await _userManager.UpdateAsync(user);
-
-        return Result<AuthResponse>.Success(new AuthResponse
+        try
         {
-            UserId = user.Id,
-            Email = user.Email!,
-            FirstName = user.FirstName,
-            LastName = user.LastName,
-            Roles = roles.ToList(),
-            Token = accessToken,
-            TokenExpiration = DateTime.UtcNow.AddMinutes(_jwtSettings.TokenExpirationInMinutes),
-            RefreshToken = refreshToken,
-            RefreshTokenExpiration = refreshTokenExpiry
-        });
+            // Always assign "User" role on registration
+            var roleResult = await _userManager.AddToRoleAsync(user, AppRoles.User);
+            if (!roleResult.Succeeded)
+                throw new Exception(string.Join(", ", roleResult.Errors.Select(e => e.Description)));
+
+            var roles = await _userManager.GetRolesAsync(user);
+            var accessToken = GenerateJwtToken(user, roles);
+            var refreshToken = GenerateRefreshToken();
+            var refreshTokenExpiry = DateTime.UtcNow.AddDays(_jwtSettings.RefreshTokenExpirationInDays);
+
+            // Store refresh token
+            user.RefreshToken = refreshToken;
+            user.RefreshTokenExpiryTime = refreshTokenExpiry;
+
+            var updateResult = await _userManager.UpdateAsync(user);
+            if (!updateResult.Succeeded)
+                throw new Exception(string.Join(", ", updateResult.Errors.Select(e => e.Description)));
+
+            return Result<AuthResponse>.Success(new AuthResponse
+            {
+                UserId = user.Id,
+                Email = user.Email!,
+                FirstName = user.FirstName,
+                LastName = user.LastName,
+                Roles = roles.ToList(),
+                Token = accessToken,
+                TokenExpiration = DateTime.UtcNow.AddMinutes(_jwtSettings.TokenExpirationInMinutes),
+                RefreshToken = refreshToken,
+                RefreshTokenExpiration = refreshTokenExpiry
+            });
+        }
+        catch (Exception ex)
+        {
+            // If role assignment fails, delete the created user to avoid orphaned accounts
+            _logger.LogError("Registration rollback triggered for email {Email}", request.Email);
+            await _userManager.DeleteAsync(user);
+            return Result<AuthResponse>.Failure(ex.Message, HttpStatusCode.InternalServerError);
+        }
     }
 
     public async Task<Result<AuthResponse>> LoginAsync(LoginRequest request)
@@ -94,14 +113,13 @@ public class AuthService : IAuthService
         var user = await _userManager.FindByEmailAsync(request.Email);
         if (user is null)
         {
-            // throw new UnauthorizedException("Invalid email or password.");
-            return Result<AuthResponse>.Failure("Invalid email or password.", HttpStatusCode.Unauthorized);
+            return Result<AuthResponse>.Failure(AuthErrorMessages.InvalidCredentials, HttpStatusCode.Unauthorized);
         }
 
         // Check if account is active
         if (!user.IsActive)
         {
-            return Result<AuthResponse>.Failure("This account has been deactivated. Please contact support.", HttpStatusCode.BadRequest);
+            return Result<AuthResponse>.Failure(AuthErrorMessages.AccountDeactivated, HttpStatusCode.BadRequest);
         }
 
         var result = await _signInManager.CheckPasswordSignInAsync(user, request.Password, lockoutOnFailure: true);
@@ -110,10 +128,12 @@ public class AuthService : IAuthService
         {
             if (result.IsLockedOut)
             {
-                return Result<AuthResponse>.Failure("Account is locked out. Please try again later.", HttpStatusCode.Unauthorized);
+                _logger.LogWarning("Account locked out for email {Email}", request.Email);
+                return Result<AuthResponse>.Failure(AuthErrorMessages.AccountLockedOut, HttpStatusCode.Unauthorized);
             }
 
-            return Result<AuthResponse>.Failure("Invalid email or password.", HttpStatusCode.Unauthorized);
+            _logger.LogWarning("Failed login attempt for email {Email}", request.Email);
+            return Result<AuthResponse>.Failure(AuthErrorMessages.InvalidCredentials, HttpStatusCode.Unauthorized);
         }
 
         var roles = await _userManager.GetRolesAsync(user);
@@ -144,25 +164,48 @@ public class AuthService : IAuthService
     public async Task<Result<AuthResponse>> RefreshTokenAsync(RefreshTokenRequest request)
     {
         // Validate the expired access token to extract claims
-        var principal = GetPrincipalFromExpiredToken(request.AccessToken);
+        var principalResult = GetPrincipalFromExpiredToken(request.AccessToken);
+
+        if (!principalResult.IsSuccess)
+        {
+            return Result<AuthResponse>.Failure(principalResult.Error!, (HttpStatusCode)principalResult.StatusCode);
+        }
+
+        // principalResult.Value is guaranteed to be non-null here because GetPrincipalFromExpiredToken
+        // returns Failure if it fails
+        var principal = principalResult.Value!;
+
         var userId = principal.FindFirstValue(JwtRegisteredClaimNames.Sub)
             ?? principal.FindFirstValue(ClaimTypes.NameIdentifier);
 
         if (userId is null)
         {
-            return Result<AuthResponse>.Failure("Invalid access token.", HttpStatusCode.Unauthorized);
+            return Result<AuthResponse>.Failure(AuthErrorMessages.InvalidAccessToken, HttpStatusCode.Unauthorized);
         }
 
         var user = await _userManager.FindByIdAsync(userId);
 
         if (user is null || !user.IsActive)
         {
-            return Result<AuthResponse>.Failure("Invalid access token.", HttpStatusCode.Unauthorized);
+            return Result<AuthResponse>.Failure(AuthErrorMessages.InvalidAccessToken, HttpStatusCode.Unauthorized);
         }
 
-        if (user.RefreshToken != request.RefreshToken || user.RefreshTokenExpiryTime <= DateTime.UtcNow)
+        // In RefreshTokenAsync — if refresh token doesn't match, revoke ALL tokens
+        if (user.RefreshToken != request.RefreshToken)
         {
-            return Result<AuthResponse>.Failure("Refresh token is invalid or has expired. Please log in again.", HttpStatusCode.Unauthorized);
+            // Possible token theft — revoke everything
+            _logger.LogWarning("Refresh token reuse detected for user {UserId}. Revoking all tokens.", user.Id);
+            user.RefreshToken = null;
+            user.RefreshTokenExpiryTime = null;
+            await _userManager.UpdateAsync(user);
+            return Result<AuthResponse>.Failure(
+                AuthErrorMessages.RefreshTokenExpired, HttpStatusCode.Unauthorized);
+        }
+
+        if (user.RefreshTokenExpiryTime <= DateTime.UtcNow)
+        {
+            return Result<AuthResponse>.Failure(
+                AuthErrorMessages.RefreshTokenExpired, HttpStatusCode.Unauthorized);
         }
 
         // Rotate: issue new access + refresh tokens
@@ -195,27 +238,28 @@ public class AuthService : IAuthService
 
         if (user is null)
         {
-            return Result.Failure($"User with ID '{userId}' was not found.", HttpStatusCode.NotFound);
+            return Result.Failure(AuthErrorMessages.UserNotFound(userId), HttpStatusCode.NotFound);
         }
 
         if (!user.IsActive)
         {
-            return Result.Failure("Cannot modify roles for a deactivated account.", HttpStatusCode.BadRequest);
+            return Result.Failure(AuthErrorMessages.CannotModifyDeactivatedRoles, HttpStatusCode.BadRequest);
         }
 
         var isAlreadyAdmin = await _userManager.IsInRoleAsync(user, AppRoles.Admin);
         if (isAlreadyAdmin)
         {
-            return Result.Failure("User already has the Admin role.", HttpStatusCode.Conflict);
+            return Result.Failure(AuthErrorMessages.AlreadyAdmin, HttpStatusCode.Conflict);
         }
 
         var result = await _userManager.AddToRoleAsync(user, AppRoles.Admin);
         if (!result.Succeeded)
         {
             var errors = string.Join(", ", result.Errors.Select(e => e.Description));
-            return Result.Failure($"Failed to assign Admin role: {errors}", HttpStatusCode.BadRequest);
+            return Result.Failure(AuthErrorMessages.AdminRoleFailed(errors), HttpStatusCode.BadRequest);
         }
 
+        _logger.LogInformation("Admin role assigned to user {UserId}", userId);
         return Result.Success();
     }
 
@@ -226,13 +270,14 @@ public class AuthService : IAuthService
         if (user is not null)
         {
             // Revoke the refresh token so it can't be reused
-            user.RefreshToken = string.Empty;
-            user.RefreshTokenExpiryTime = DateTime.MinValue;
+            user.RefreshToken = null;
+            user.RefreshTokenExpiryTime = null;
             await _userManager.UpdateAsync(user);
         }
 
         await _signInManager.SignOutAsync();
 
+        _logger.LogInformation("User {UserId} logged out", userId);
         return Result.Success();
     }
 
@@ -245,9 +290,7 @@ public class AuthService : IAuthService
         {
             new(JwtRegisteredClaimNames.Sub, user.Id),
             new(JwtRegisteredClaimNames.Email, user.Email!),
-            new(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()),
-            new("firstName", user.FirstName),
-            new("lastName", user.LastName)
+            new(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString())
         };
 
         // Add role claims
@@ -274,7 +317,7 @@ public class AuthService : IAuthService
         return Convert.ToBase64String(randomBytes);
     }
 
-    private ClaimsPrincipal GetPrincipalFromExpiredToken(string token)
+    private Result<ClaimsPrincipal> GetPrincipalFromExpiredToken(string token)
     {
         var tokenValidationParameters = new TokenValidationParameters
         {
@@ -288,15 +331,22 @@ public class AuthService : IAuthService
                 Encoding.UTF8.GetBytes(_jwtSettings.Secret))
         };
 
-        var tokenHandler = new JwtSecurityTokenHandler();
-        var principal = tokenHandler.ValidateToken(token, tokenValidationParameters, out var securityToken);
-
-        if (securityToken is not JwtSecurityToken jwtSecurityToken ||
-            !jwtSecurityToken.Header.Alg.Equals(SecurityAlgorithms.HmacSha256, StringComparison.InvariantCultureIgnoreCase))
+        try
         {
-            throw new UnauthorizedException("Invalid access token.");
-        }
+            var tokenHandler = new JwtSecurityTokenHandler();
+            var principal = tokenHandler.ValidateToken(token, tokenValidationParameters, out var securityToken);
 
-        return principal;
+            if (securityToken is not JwtSecurityToken jwtSecurityToken ||
+                !jwtSecurityToken.Header.Alg.Equals(SecurityAlgorithms.HmacSha256, StringComparison.InvariantCultureIgnoreCase))
+            {
+                return Result<ClaimsPrincipal>.Failure(AuthErrorMessages.InvalidAccessToken, HttpStatusCode.Unauthorized);
+            }
+
+            return Result<ClaimsPrincipal>.Success(principal);
+        }
+        catch (Exception)
+        {
+            return Result<ClaimsPrincipal>.Failure(AuthErrorMessages.InvalidAccessToken, HttpStatusCode.Unauthorized);
+        }
     }
 }
