@@ -21,29 +21,49 @@ public class AuthController : ControllerBase
     [HttpPost("register")]
     public async Task<ActionResult<AuthResponse>> Register([FromBody] RegisterRequest request)
     {
-        var response = await _authService.RegisterAsync(request);
-        return Ok(response);
+        var result = await _authService.RegisterAsync(request);
+        if (!result.IsSuccess)
+        {
+            return StatusCode(result.StatusCode, new { message = result.Error });
+        }
+
+        return Ok(result.Value);
     }
 
     [HttpPost("login")]
     public async Task<ActionResult<AuthResponse>> Login([FromBody] LoginRequest request)
     {
-        var response = await _authService.LoginAsync(request);
-        return Ok(response);
+        var result = await _authService.LoginAsync(request);
+        if (!result.IsSuccess)
+        {
+            return StatusCode(result.StatusCode, new { message = result.Error });
+        }
+
+        return Ok(result.Value);
     }
 
     [HttpPost("refresh-token")]
     public async Task<ActionResult<AuthResponse>> RefreshToken([FromBody] RefreshTokenRequest request)
     {
-        var response = await _authService.RefreshTokenAsync(request);
-        return Ok(response);
+        var result = await _authService.RefreshTokenAsync(request);
+        if (!result.IsSuccess)
+        {
+            return StatusCode(result.StatusCode, new { message = result.Error });
+        }
+
+        return Ok(result.Value);
     }
 
     [Authorize(Policy = AppPolicies.AdminOnly)]
     [HttpPost("set-admin/{userId}")]
     public async Task<IActionResult> SetAdmin(string userId)
     {
-        await _authService.SetAdminAsync(userId);
+        var result = await _authService.SetAdminAsync(userId);
+        if (!result.IsSuccess)
+        {
+            return StatusCode(result.StatusCode, new { message = result.Error });
+        }
+
         return Ok(new { message = "Admin role assigned successfully." });
     }
 

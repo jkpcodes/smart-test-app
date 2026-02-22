@@ -1,10 +1,12 @@
 using System.IdentityModel.Tokens.Jwt;
+using System.Net;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
+using SmartTest.App.Common;
 using SmartTest.App.Constants;
 using SmartTest.App.DTOs.Auth;
 using SmartTest.App.Exceptions;
@@ -33,13 +35,13 @@ public class AuthService : IAuthService
         _jwtSettings = jwtSettings.Value;
     }
 
-    public async Task<AuthResponse> RegisterAsync(RegisterRequest request)
+    public async Task<Result<AuthResponse>> RegisterAsync(RegisterRequest request)
     {
         // Check if user already exists
         var existingUser = await _userManager.FindByEmailAsync(request.Email);
         if (existingUser is not null)
         {
-            throw new ConflictException($"An account with email '{request.Email}' already exists.");
+            return Result<AuthResponse>.Failure($"An account with email '{request.Email}' already exists.", HttpStatusCode.Conflict);
         }
 
         var user = new ApplicationUser
@@ -73,7 +75,7 @@ public class AuthService : IAuthService
         user.RefreshTokenExpiryTime = refreshTokenExpiry;
         await _userManager.UpdateAsync(user);
 
-        return new AuthResponse
+        return Result<AuthResponse>.Success(new AuthResponse
         {
             UserId = user.Id,
             Email = user.Email!,
@@ -84,21 +86,22 @@ public class AuthService : IAuthService
             TokenExpiration = DateTime.UtcNow.AddMinutes(_jwtSettings.TokenExpirationInMinutes),
             RefreshToken = refreshToken,
             RefreshTokenExpiration = refreshTokenExpiry
-        };
+        });
     }
 
-    public async Task<AuthResponse> LoginAsync(LoginRequest request)
+    public async Task<Result<AuthResponse>> LoginAsync(LoginRequest request)
     {
         var user = await _userManager.FindByEmailAsync(request.Email);
         if (user is null)
         {
-            throw new UnauthorizedException("Invalid email or password.");
+            // throw new UnauthorizedException("Invalid email or password.");
+            return Result<AuthResponse>.Failure("Invalid email or password.", HttpStatusCode.Unauthorized);
         }
 
         // Check if account is active
         if (!user.IsActive)
         {
-            throw new BadRequestException("This account has been deactivated. Please contact support.");
+            return Result<AuthResponse>.Failure("This account has been deactivated. Please contact support.", HttpStatusCode.BadRequest);
         }
 
         var result = await _signInManager.CheckPasswordSignInAsync(user, request.Password, lockoutOnFailure: true);
@@ -107,10 +110,10 @@ public class AuthService : IAuthService
         {
             if (result.IsLockedOut)
             {
-                throw new UnauthorizedException("Account is locked out. Please try again later.");
+                return Result<AuthResponse>.Failure("Account is locked out. Please try again later.", HttpStatusCode.Unauthorized);
             }
 
-            throw new UnauthorizedException("Invalid email or password.");
+            return Result<AuthResponse>.Failure("Invalid email or password.", HttpStatusCode.Unauthorized);
         }
 
         var roles = await _userManager.GetRolesAsync(user);
@@ -124,7 +127,7 @@ public class AuthService : IAuthService
         user.RefreshTokenExpiryTime = refreshTokenExpiry;
         await _userManager.UpdateAsync(user);
 
-        return new AuthResponse
+        return Result<AuthResponse>.Success(new AuthResponse
         {
             UserId = user.Id,
             Email = user.Email!,
@@ -135,10 +138,10 @@ public class AuthService : IAuthService
             TokenExpiration = DateTime.UtcNow.AddMinutes(_jwtSettings.TokenExpirationInMinutes),
             RefreshToken = refreshToken,
             RefreshTokenExpiration = refreshTokenExpiry
-        };
+        });
     }
 
-    public async Task<AuthResponse> RefreshTokenAsync(RefreshTokenRequest request)
+    public async Task<Result<AuthResponse>> RefreshTokenAsync(RefreshTokenRequest request)
     {
         // Validate the expired access token to extract claims
         var principal = GetPrincipalFromExpiredToken(request.AccessToken);
@@ -147,19 +150,19 @@ public class AuthService : IAuthService
 
         if (userId is null)
         {
-            throw new UnauthorizedException("Invalid access token.");
+            return Result<AuthResponse>.Failure("Invalid access token.", HttpStatusCode.Unauthorized);
         }
 
         var user = await _userManager.FindByIdAsync(userId);
 
         if (user is null || !user.IsActive)
         {
-            throw new UnauthorizedException("Invalid access token.");
+            return Result<AuthResponse>.Failure("Invalid access token.", HttpStatusCode.Unauthorized);
         }
 
         if (user.RefreshToken != request.RefreshToken || user.RefreshTokenExpiryTime <= DateTime.UtcNow)
         {
-            throw new UnauthorizedException("Refresh token is invalid or has expired. Please log in again.");
+            return Result<AuthResponse>.Failure("Refresh token is invalid or has expired. Please log in again.", HttpStatusCode.Unauthorized);
         }
 
         // Rotate: issue new access + refresh tokens
@@ -172,7 +175,7 @@ public class AuthService : IAuthService
         user.RefreshTokenExpiryTime = refreshTokenExpiry;
         await _userManager.UpdateAsync(user);
 
-        return new AuthResponse
+        return Result<AuthResponse>.Success(new AuthResponse
         {
             UserId = user.Id,
             Email = user.Email!,
@@ -183,38 +186,40 @@ public class AuthService : IAuthService
             TokenExpiration = DateTime.UtcNow.AddMinutes(_jwtSettings.TokenExpirationInMinutes),
             RefreshToken = newRefreshToken,
             RefreshTokenExpiration = refreshTokenExpiry
-        };
+        });
     }
 
-    public async Task SetAdminAsync(string userId)
+    public async Task<Result> SetAdminAsync(string userId)
     {
         var user = await _userManager.FindByIdAsync(userId);
 
         if (user is null)
         {
-            throw new NotFoundException($"User with ID '{userId}' was not found.");
+            return Result.Failure($"User with ID '{userId}' was not found.", HttpStatusCode.NotFound);
         }
 
         if (!user.IsActive)
         {
-            throw new BadRequestException("Cannot modify roles for a deactivated account.");
+            return Result.Failure("Cannot modify roles for a deactivated account.", HttpStatusCode.BadRequest);
         }
 
         var isAlreadyAdmin = await _userManager.IsInRoleAsync(user, AppRoles.Admin);
         if (isAlreadyAdmin)
         {
-            throw new ConflictException("User already has the Admin role.");
+            return Result.Failure("User already has the Admin role.", HttpStatusCode.Conflict);
         }
 
         var result = await _userManager.AddToRoleAsync(user, AppRoles.Admin);
         if (!result.Succeeded)
         {
             var errors = string.Join(", ", result.Errors.Select(e => e.Description));
-            throw new BadRequestException($"Failed to assign Admin role: {errors}");
+            return Result.Failure($"Failed to assign Admin role: {errors}", HttpStatusCode.BadRequest);
         }
+
+        return Result.Success();
     }
 
-    public async Task LogoutAsync(string userId)
+    public async Task<Result> LogoutAsync(string userId)
     {
         var user = await _userManager.FindByIdAsync(userId);
 
@@ -227,6 +232,8 @@ public class AuthService : IAuthService
         }
 
         await _signInManager.SignOutAsync();
+
+        return Result.Success();
     }
 
     private string GenerateJwtToken(ApplicationUser user, IList<string> roles)
