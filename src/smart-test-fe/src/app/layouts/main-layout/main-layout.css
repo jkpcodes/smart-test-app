@@ -1,0 +1,29 @@
+.sidenav-container {
+  height: 100%;
+}
+
+.sidenav {
+  width: 260px;
+  border-radius: 0;
+}
+
+.toolbar-title {
+  color: var(--mat-sys-primary);
+  margin-left: 8px;
+  font-size: 1.5rem;
+  font-weight: 500;
+}
+
+.spacer {
+  flex: 1 1 auto;
+}
+
+.content {
+  padding: 24px;
+  max-width: 1300px;
+  margin: 0 auto;
+}
+
+.active-link {
+  opacity: 0.85;
+}

@@ -1,0 +1,19 @@
+/* You can add global styles to this file, and also import other style files */
+
+@import "tailwindcss";
+
+h1 {
+  color: var(--mat-sys-primary);
+}
+
+p {
+  color: var(--mat-sys-secondary);
+}
+
+mat-toolbar {
+  border-bottom: 2px solid #e0e0e0;
+}
+
+mat-card-title {
+  color: var(--mat-sys-primary);
+}

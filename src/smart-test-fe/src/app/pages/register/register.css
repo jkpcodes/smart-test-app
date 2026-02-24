@@ -1,0 +1,43 @@
+.register-container {
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding-top: 48px;
+}
+
+.register-card {
+  width: 100%;
+  max-width: 500px;
+  padding: 24px;
+}
+
+.register-form {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 16px;
+}
+
+.name-row {
+  display: flex;
+  gap: 12px;
+}
+
+.name-row mat-form-field {
+  flex: 1;
+}
+
+.full-width {
+  width: 100%;
+}
+
+.submit-btn {
+  margin-top: 8px;
+  height: 48px;
+  font-size: 1rem;
+}
+
+.login-link {
+  font-size: 0.875rem;
+  color: var(--mat-sys-on-surface-variant);
+}

@@ -1,0 +1,48 @@
+<mat-sidenav-container class="sidenav-container">
+  <mat-sidenav
+    #sidenav
+    [opened]="sidenavOpened()"
+    mode="over"
+    (closed)="sidenavOpened.set(false)"
+    class="sidenav"
+  >
+    <mat-toolbar color="primary">Menu</mat-toolbar>
+    <mat-nav-list>
+      <a mat-list-item (click)="navigateTo('/')">
+        <mat-icon matListItemIcon>home</mat-icon>
+        <span matListItemTitle>Home</span>
+      </a>
+      <a mat-list-item (click)="navigateTo('/login')">
+        <mat-icon matListItemIcon>login</mat-icon>
+        <span matListItemTitle>Login</span>
+      </a>
+      <a mat-list-item (click)="navigateTo('/register')">
+        <mat-icon matListItemIcon>person_add</mat-icon>
+        <span matListItemTitle>Register</span>
+      </a>
+    </mat-nav-list>
+  </mat-sidenav>
+
+  <mat-sidenav-content>
+    <mat-toolbar color="primary">
+      <button mat-icon-button (click)="toggleSidenav()">
+        <mat-icon>menu</mat-icon>
+      </button>
+      <img src="logo.svg" alt="App Logo" style="width: 32px; height: 32px;" />
+      <span color="primary" class="toolbar-title">Smart Test</span>
+      <span class="spacer"></span>
+      <a mat-button color="primary" routerLink="/login" routerLinkActive="active-link">
+        <mat-icon>login</mat-icon>
+        Login
+      </a>
+      <a mat-button color="primary" routerLink="/register" routerLinkActive="active-link">
+        <mat-icon>person_add</mat-icon>
+        Register
+      </a>
+    </mat-toolbar>
+
+    <main class="content">
+      <router-outlet />
+    </main>
+  </mat-sidenav-content>
+</mat-sidenav-container>
